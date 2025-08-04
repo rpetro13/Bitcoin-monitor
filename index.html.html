@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitcoin Price Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.emailjs.com/dist/email.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .dashboard {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .price-display {
+            font-size: 2.5rem;
+            font-weight: bold;
+            text-align: center;
+            margin: 20px 0;
+            color: #f7931a;
+        }
+        .threshold-form {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        input, button {
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+        }
+        button {
+            background-color: #f7931a;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #e07b0c;
+        }
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-top: 30px;
+        }
+        .alert {
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 20px;
+            display: none;
+        }
+        .alert-warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffeeba;
+            color: #856404;
+        }
+        .history {
+            margin-top: 30px;
+        }
+        .history-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <h1>Monitor de Precio de Bitcoin</h1>
+        
+        <div class="price-display" id="currentPrice">Cargando...</div>
+        
+        <div class="threshold-form">
+            <input type="number" id="thresholdInput" placeholder="Umbral de alerta (ej. 119000)" value="119000">
+            <input type="email" id="emailInput" placeholder="Tu email para alertas">
+            <button id="setThreshold">Configurar Alerta</button>
+        </div>
+        
+        <div id="alertBox" class="alert alert-warning" style="display: none;"></div>
+        
+        <div class="chart-container">
+            <canvas id="priceChart"></canvas>
+        </div>
+        
+        <div class="history">
+            <h3>Historial (últimas 24 horas)</h3>
+            <div id="priceHistory"></div>
+        </div>
+    </div>
+
+    <script>
+        // Configuración inicial
+        let priceData = [];
+        let priceChart;
+        let currentThreshold = 119000;
+        let notificationEmail = '';
+        let checkInterval;
+        
+        // Inicializar EmailJS (debes crear una cuenta gratis en emailjs.com)
+        emailjs.init('tu_user_id_emailjs'); // Reemplaza con tu ID
+        
+        // Elementos del DOM
+        const currentPriceEl = document.getElementById('currentPrice');
+        const thresholdInputEl = document.getElementById('thresholdInput');
+        const emailInputEl = document.getElementById('emailInput');
+        const setThresholdBtn = document.getElementById('setThreshold');
+        const alertBoxEl = document.getElementById('alertBox');
+        const priceHistoryEl = document.getElementById('priceHistory');
+        const chartCtx = document.getElementById('priceChart').getContext('2d');
+        
+        // Configurar el gráfico
+        function initChart() {
+            priceChart = new Chart(chartCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Precio Bitcoin (USD)',
+                        data: [],
+                        borderColor: '#f7931a',
+                        backgroundColor: 'rgba(247, 147, 26, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: false
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Obtener el precio actual de Bitcoin
+        async function getBitcoinPrice() {
+            try {
+                const response = await fetch('https://api.coindesk.com/v1/bpi/currentprice.json');
+                const data = await response.json();
+                const price = parseFloat(data.bpi.USD.rate.replace(',', ''));
+                const timestamp = new Date().toLocaleTimeString();
+                
+                // Actualizar la visualización
+                currentPriceEl.textContent = `$${price.toLocaleString('en-US')}`;
+                
+                // Agregar al historial
+                priceData.push({ price, timestamp });
+                if (priceData.length > 48) { // Mantener solo 24 horas (48 medias horas)
+                    priceData.shift();
+                }
+                
+                // Actualizar gráfico
+                updateChart();
+                
+                // Actualizar historial
+                updateHistory();
+                
+                // Verificar alerta
+                checkAlert(price, timestamp);
+                
+                return price;
+            } catch (error) {
+                console.error('Error al obtener precio:', error);
+                currentPriceEl.textContent = 'Error al obtener precio';
+                return null;
+            }
+        }
+        
+        // Actualizar el gráfico
+        function updateChart() {
+            const labels = priceData.map(item => item.timestamp);
+            const data = priceData.map(item => item.price);
+            
+            priceChart.data.labels = labels;
+            priceChart.data.datasets[0].data = data;
+            priceChart.update();
+        }
+        
+        // Actualizar el historial
+        function updateHistory() {
+            priceHistoryEl.innerHTML = '';
+            priceData.slice().reverse().forEach(item => {
+                const historyItem = document.createElement('div');
+                historyItem.className = 'history-item';
+                historyItem.innerHTML = `
+                    <span>${item.timestamp}</span>
+                    <span>$${item.price.toLocaleString('en-US')}</span>
+                `;
+                priceHistoryEl.appendChild(historyItem);
+            });
+        }
+        
+        // Verificar si se debe enviar alerta
+        function checkAlert(currentPrice, timestamp) {
+            if (currentPrice > currentThreshold && notificationEmail) {
+                const alertMessage = `¡ALERTA! Bitcoin superó $${currentThreshold}: $${currentPrice.toLocaleString('en-US')} (${timestamp})`;
+                
+                // Mostrar notificación en la página
+                alertBoxEl.style.display = 'block';
+                alertBoxEl.textContent = alertMessage;
+                
+                // Notificación del navegador
+                if (Notification.permission === 'granted') {
+                    new Notification('Alerta de Bitcoin', { body: alertMessage });
+                }
+                
+                // Enviar email
+                sendEmailAlert(currentPrice, timestamp);
+            }
+        }
+        
+        // Enviar alerta por email
+        function sendEmailAlert(price, timestamp) {
+            const templateParams = {
+                to_email: notificationEmail,
+                threshold: currentThreshold,
+                current_price: price,
+                time: timestamp
+            };
+            
+            emailjs.send('default_service', 'template_id', templateParams) // Reemplaza con tu template
+                .then(response => console.log('Email enviado:', response))
+                .catch(error => console.error('Error al enviar email:', error));
+        }
+        
+        // Configurar el intervalo de verificación
+        function startMonitoring() {
+            // Verificar inmediatamente
+            getBitcoinPrice();
+            
+            // Configurar intervalo cada 30 minutos
+            clearInterval(checkInterval);
+            checkInterval = setInterval(getBitcoinPrice, 30 * 60 * 1000);
+        }
+        
+        // Event listeners
+        setThresholdBtn.addEventListener('click', () => {
+            currentThreshold = parseFloat(thresholdInputEl.value);
+            notificationEmail = emailInputEl.value.trim();
+            
+            if (notificationEmail && !notificationEmail.includes('@')) {
+                alert('Por favor ingresa un email válido');
+                return;
+            }
+            
+            alert(`Alerta configurada: Se notificará cuando BTC > $${currentThreshold} a ${notificationEmail}`);
+        });
+        
+        // Solicitar permiso para notificaciones
+        document.addEventListener('DOMContentLoaded', () => {
+            if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+                Notification.requestPermission();
+            }
+            
+            initChart();
+            startMonitoring();
+        });
+    </script>
+</body>
+</html>
